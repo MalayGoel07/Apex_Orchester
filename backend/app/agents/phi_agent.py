@@ -1,4 +1,5 @@
 from ollama import Client
+import re
 client = Client()
 
 def _extract_content(response) -> str:
@@ -33,21 +34,31 @@ def judge_and_route(task: str, output: str) -> str:
     try:
         response = client.chat(model="phi",messages=[{"role": "user", "content": prompt}],options={"temperature": 0, "num_predict": 50},keep_alive=0)
         score_text = _extract_content(response).strip()
-        try:
-            score = int(''.join(filter(str.isdigit, score_text)))
-        except:
-            return "[phi_agent] invalid score format"
+        match = re.search(r"\d{1,3}", score_text or "")
+        if not match:
+            try:
+                from backend.app.agents.llama3 import orchestrate as orc
+                rerun = orc(task, useQualityCheck=False)
+                return rerun.get("output", output)
+            except Exception:
+                return output
+        score = max(0, min(100, int(match.group(0))))
         if score >= 60:
             return output
         else:
-            improved_task = f"""{task} Improve the answer. Be more precise, clear, and complete """
             try:
                 from backend.app.agents.llama3 import orchestrate as orc
-                return orc(improved_task,useQualityCheck=False)
+                rerun = orc(task, useQualityCheck=False)
+                return rerun.get("output", output)
             except Exception:
                 return output
     except Exception:
-        return "[phi_agent fallback] failed to process"
+        try:
+            from backend.app.agents.llama3 import orchestrate as orc
+            rerun = orc(task, useQualityCheck=False)
+            return rerun.get("output", output)
+        except Exception:
+            return output
 
 
 def generate(task_text: str) -> str:
