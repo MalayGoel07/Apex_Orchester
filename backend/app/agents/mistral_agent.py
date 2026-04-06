@@ -42,7 +42,7 @@ def generate(task_text: str) -> str:
         f"TASK:\n{task_text}"
     )
     try:
-        response = client.chat(model="mistral", messages=[{"role": "user", "content": prompt}],options={"temperature": 0, "num_predict": 400},keep_alive=0)
+        response = client.chat(model="mistral", messages=[{"role": "user", "content": prompt}],options={"temperature": 0.8, "num_predict": 600},keep_alive=0)
         text = _extract_content(response)
         if text == "[mistral_agent] No response":
             from backend.app.agents.llama3 import orchestrate
