@@ -1,54 +1,74 @@
 from ollama import Client
+import logging
+
 client = Client()
+logger = logging.getLogger("mistral_merger")
 
-def _extract_content(response) -> str:
+def _extract(response):
     if isinstance(response, dict):
-        direct = response.get("content")
-        if isinstance(direct, str) and direct.strip():
-            return direct
-        message = response.get("message", {})
-        if isinstance(message, dict):
-            msg_content = message.get("content", "")
-            if isinstance(msg_content, str) and msg_content.strip():
-                return msg_content
-
-    message_obj = getattr(response, "message", None)
-    if message_obj is not None:
-        msg_content = getattr(message_obj, "content", "")
-        if isinstance(msg_content, str) and msg_content.strip():
-            return msg_content
-
-    direct_obj = getattr(response, "content", "")
-    if isinstance(direct_obj, str) and direct_obj.strip():
-        return direct_obj
-    return "[mistral_agent] No response"
+        return response.get("content") or response.get("message", {}).get("content", "")
+    return getattr(getattr(response, "message", None), "content", "") or ""
 
 
-def generate(task_text: str) -> str:
-    prompt=(
-        "Write your name Mistral as 1st word to start of with.\n"
-        "You are a highly intelligent ai reasoning and tex-processing agent.\n"
-        "\nyour responsibilities:\n"
-        "Understand the task deeply."
-        "Provide accurate,structured and concide response.\n"
-        "think logically and avoid assumptions.\n"
-        "Your capabilities Explanation,planning,summarization and dicision making.\n"
-        "\nrules:\n"
-        "Be clear and structured.\n"
-        "max word limit is 250words\n"
-        "Ensure correctness and logic.\n"
-        "Give structured output or answers (use steps or bullets if needed).\n"
-        "keep answer concise but complete.\n\n"
-        f"TASK:\n{task_text}"
-    )
+def merge_output(task: str, code_output: str, text_output: str):
+    prompt = f"""
+        You are a RESPONSE COMPOSER agent.
+
+        TASK:
+        {task}
+
+        CODE OUTPUT:
+        {code_output}
+
+        TEXT OUTPUT:
+        {text_output}
+
+        RULES:
+        - Do NOT change code logic
+        - Preserve code EXACTLY as given
+        - Wrap code inside proper markdown triple backticks
+        - Do NOT modify spacing, indentation, or syntax
+        - Only structure and organize
+        - Combine outputs into ONE clean response
+        - Use headings:
+            1. Summary
+            2. Code
+            3. Explanation
+        - Keep it concise and readable
+        """
+
     try:
-        response = client.chat(model="mistral", messages=[{"role": "user", "content": prompt}],options={"temperature": 0.8, "num_predict": 600},keep_alive=0)
-        text = _extract_content(response)
-        if text == "[mistral_agent] No response":
-            from backend.app.agents.llama3 import orchestrate
-            fallback = orchestrate(task_text, useQualityCheck=False)
-            return fallback.get("output", "[mistral_agent] No response")
+        response = client.chat(model="mistral",messages=[{"role": "user", "content": prompt}],options={"temperature": 0.4,"num_predict": 800,"stop": ["\n\n\n"],"num_ctx": 4096,"repeat_penalty": 1.1},keep_alive=0)
+        text = _extract(response)
+        if not text or len(text.strip()) < 20:
+            logger.warning("mistral_invalid_output")
+            return text_output if 'text_output' in locals() else task_text
         return text
-    except Exception:
-        from backend.app.agents.phi_agent import generate as phi_generate
-        return phi_generate(task_text)
+    except Exception as e:
+        logger.error(f"merge failed: {e}")
+        return f"""
+            ### Code
+            {code_output}
+            ### Explanation
+            {text_output}
+            """
+
+def generate(task_text: str):
+    prompt = f"""
+        You are Mistral, a reasoning + explanation agent.
+        RULES:
+        - Be structured
+        - Be concise
+        - No hallucination
+        - Max 500 words
+        TASK:
+        {task_text}
+        """
+    try:
+        response = client.chat(model="mistral",messages=[{"role": "user", "content": prompt}],options={"temperature": 0.4,"num_predict": 800,"stop": ["</s>"],"num_ctx": 4096,"repeat_penalty": 1.1},keep_alive=60)
+        text = _extract(response)
+        logger.info("mistral_success | output_length=%s", len(text or ""))
+        return text
+    except Exception as e:
+        logger.warning("mistral_fallback | error=%s", e)
+        return f"[mistral fallback] {task_text}"

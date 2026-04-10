@@ -11,6 +11,7 @@ class TaskResponse(BaseModel):
     selected_agent: str
     fallback_used: bool
     agents_used: List[str] = []
+    classification: Optional[str] = None
     gemini_quota_remaining: Optional[int] = None
     warning: Optional[str] = None
     error: Optional[str] = None

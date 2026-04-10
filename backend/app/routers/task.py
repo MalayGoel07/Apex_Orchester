@@ -21,6 +21,7 @@ async def run_task_api(data: TaskRequest):
         selected_agent=selected_agent,
         fallback_used=bool(result.get("fallback_used", False)),
         agents_used=agents_used,
+        classification=result.get("classification"),
         gemini_quota_remaining=result.get("gemini_quota_remaining"),
         warning=result.get("warning"),
         error=result.get("error"),

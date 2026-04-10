@@ -3,17 +3,16 @@ import AgentPanel from "./AgentPanel.jsx";
 import Topbar from "./Topbar.jsx";
 
 const AGENT_BLUEPRINT = [
-  { id: 1, key: "gemini", name: "Gemini", idleUsage: "Output Quality Checker" },
-  { id: 2, key: "llama3", name: "Llama3:8B", idleUsage: "Waiting for a task" },
-  { id: 3, key: "mistral", name: "Mistral", idleUsage: "Waiting for a task" },
-  { id: 4, key: "deepseek", name: "Deepseek-coder", idleUsage: "Waiting for a task" },
-  { id: 5, key: "phi", name: "Phi", idleUsage: "Fallback agent standby" },
+  { id: 1, key: "llama3", name: "Llama3 Router", idleUsage: "Classifies and routes tasks" },
+  { id: 2, key: "deepseek", name: "DeepSeek Coder", idleUsage: "Handles code tasks" },
+  { id: 3, key: "mistral", name: "Mistral", idleUsage: "Handles text tasks" },
+  { id: 4, key: "phi", name: "Phi", idleUsage: "Fallback agent standby" },
+  { id: 5, key: "gemini", name: "Gemini", idleUsage: "Optional quality check" },
 ];
 
 const Dashboard = () => {
-  //status
   const [task, setTask] = useState("");
-  const [agents, setAgents] = useState(AGENT_BLUEPRINT.map((agent) => ({...agent,status: "idle",usage: agent.idleUsage,startTime: null,endTime: null,duration: null,})));
+  const [agents, setAgents] = useState(AGENT_BLUEPRINT.map((a) => ({...a,status: "idle",usage: a.idleUsage,startTime: null,endTime: null,duration: null,})));
   const [isRunning, setIsRunning] = useState(false);
   const [statusLabel, setStatusLabel] = useState("");
   const [output, setOutput] = useState("");
@@ -23,16 +22,16 @@ const Dashboard = () => {
   const [liveElapsed, setLiveElapsed] = useState("0.00");
   const [classification, setClassification] = useState("Not yet classified");
 
-  //ref
   const runStartedAtRef = useRef(null);
   const resetIdleTimerRef = useRef(null);
   const abortControllerRef = useRef(null);
+  const requestIdRef = useRef(null);
 
-  //fetch items
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
   const isGeminiAvailable = geminiQuota > 0 && !isRunning;
 
-  //live timer
+  const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+
   useEffect(() => {
     if (!isRunning || !runStartedAtRef.current) return;
     const timer = setInterval(() => {
@@ -42,7 +41,6 @@ const Dashboard = () => {
     return () => clearInterval(timer);
   }, [isRunning]);
 
-  //cleanup
   useEffect(() => {
     return () => {
       if (resetIdleTimerRef.current) clearTimeout(resetIdleTimerRef.current);
@@ -50,41 +48,65 @@ const Dashboard = () => {
     };
   }, []);
 
-  //agents
   const setAgentsIdle = () => {
     setAgents((prev) =>
       prev.map((agent) => {
         if (agent.key === "gemini") {
-          if (geminiQuota <= 0) {return { ...agent, status: "error", usage: "Quota exhausted" };}
-          if (useQualityCheck) {return { ...agent, status: "idle", usage: "Quality check armed" };}
+          if (geminiQuota <= 0) return { ...agent, status: "error", usage: "Quota exhausted" };
+          if (useQualityCheck) return { ...agent, status: "idle", usage: "Quality check armed" };
         }
         return { ...agent, status: "idle", usage: agent.idleUsage, startTime: null, endTime: null, duration: null };
-      }));};
-  const setBusyAgent = (busyKey, usage, startAt = Date.now()) => {
-    setAgents((prev) =>prev.map((agent) =>
-       agent.key === busyKey ? { ...agent, status: "busy", usage, startTime: startAt, endTime: null, duration: null }: agent));};
+      })
+    );
+  };
+
+  const setBusyAgent = (key, usage, startAt = Date.now()) => {
+    setAgents((prev) =>prev.map((a) =>a.key === key ? { ...a, status: "busy", usage, startTime: startAt, endTime: null, duration: null } : a));};
 
   const updateAgentsFromResponse = (taskdata, now) => {
     const { agents_used = [], fallback_used = false, classification: cls } = taskdata;
 
     setAgents((prev) =>
       prev.map((agent) => {
-        if (agent.key === "llama3") {return { ...agent, status: "complete", usage: `Classified: ${cls}`, endTime: now };}
-        if (agents_used.includes(agent.key)) {return { ...agent, status: "complete", usage: fallback_used && agent.key === "phi" ? "Fallback executed" : "Task completed", endTime: now,};}
+        if (agent.key === "llama3") {
+          const duration = agent.startTime ? ((now - agent.startTime) / 1000).toFixed(2) : null;
+          return {...agent,status: "complete",usage: `Classified: ${cls || "Unknown"}`,endTime: now,duration,};}
+        if (agent.key === "gemini") {
+          if (useQualityCheck && geminiQuota > 0) {
+            return { ...agent, status: "complete", usage: "Quality check complete", endTime: now };
+          }
+          return { ...agent, status: "idle", usage: agent.idleUsage };
+        }
+        if (agents_used.includes(agent.key)) {
+          const duration = agent.startTime ? ((now - agent.startTime) / 1000).toFixed(2) : null;
+          return {...agent,status: "complete",usage: fallback_used && agent.key === "phi" ? "Fallback executed" : "Task completed",endTime: now,duration,};}
         return { ...agent, status: "idle", usage: agent.idleUsage };
       })
     );
   };
 
-  //run
+  const streamOutput = async (text) => {
+    setOutput("");
+    const words = text.split(" ");
+    for (let i = 0; i < words.length; i++) {
+      setOutput((prev) => prev + words[i] + " ");
+      await delay(10);
+    }
+  };
+
   const handleRun = async () => {
     const trimmedTask = task.trim();
     if (!trimmedTask || isRunning) return;
-    if (abortControllerRef.current) {abortControllerRef.current.abort();}
+
+    if (abortControllerRef.current) abortControllerRef.current.abort();
     abortControllerRef.current = new AbortController();
 
-    const managerStartedAt = Date.now();
-    runStartedAtRef.current = managerStartedAt;
+    const reqId = Date.now();
+    requestIdRef.current = reqId;
+
+    const start = Date.now();
+    runStartedAtRef.current = start;
+
     if (resetIdleTimerRef.current) clearTimeout(resetIdleTimerRef.current);
 
     setIsRunning(true);
@@ -94,7 +116,9 @@ const Dashboard = () => {
     setLiveElapsed("0.00");
     setClassification("Classifying...");
 
-    setBusyAgent("llama3", "Classifying task...", managerStartedAt);
+    setBusyAgent("llama3", "Classifying...", start);
+    await delay(300);
+    setBusyAgent("llama3", "Routing to agents...");
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/run-task`, {
@@ -105,43 +129,39 @@ const Dashboard = () => {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `HTTP ${response.status}`);
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${response.status}`);
       }
 
-      const taskdata = await response.json();
+      const data = await response.json();
 
-      setClassification(taskdata.classification || "Unknown");
-      setOutput(taskdata.output || "No output returned.");
-      if (typeof taskdata.gemini_quota_remaining === "number") {
-        setGeminiQuota(taskdata.gemini_quota_remaining);
-      }
+      if (requestIdRef.current !== reqId) return;
+      setClassification(data.classification || "Unknown");
+      if (typeof data.gemini_quota_remaining === "number") {setGeminiQuota(data.gemini_quota_remaining);}
 
-      updateAgentsFromResponse(taskdata, Date.now());
+      await streamOutput(data.output || "No output returned.");
+      updateAgentsFromResponse(data, Date.now());
 
-      // Status message with context
-      const agentsUsed = taskdata.agents_used || [];
-      const selectedLabel = agentsUsed.length ? ` (${agentsUsed.join(", ")})` : "";
-      setStatusLabel(taskdata.fallback_used ? `Task completed via fallback${selectedLabel}` : `Task completed${selectedLabel}`);
+      const agentsUsed = data.agents_used || [];
+      const label = agentsUsed.length ? ` (${agentsUsed.join(", ")})` : "";
 
+      setStatusLabel(
+        data.fallback_used ? `Task completed via fallback${label}` : `Task completed${label}`);
     } catch (error) {
       if (error.name === "AbortError") {
         setStatusLabel("Request cancelled");
         return;
       }
+
       setOutput(`❌ Error: ${error.message || "Unknown error"}`);
       setStatusLabel("Execution failed");
-      setAgents((prev) =>
-        prev.map((agent) =>
-          agent.key === "phi" ? { ...agent, status: "error", usage: "Fallback triggered" } : { ...agent, status: "idle", usage: agent.idleUsage }));
-      console.error("Orchestration failed:", error);
+      setAgents((prev) =>prev.map((a) =>a.key === "phi"? { ...a, status: "error", usage: "Fallback triggered" }: { ...a, status: "idle", usage: a.idleUsage }));
     } finally {
-      const totalSeconds = ((Date.now() - managerStartedAt) / 1000).toFixed(2);
-      setTotalRunTime(totalSeconds);
+      const total = ((Date.now() - start) / 1000).toFixed(2);
+      setTotalRunTime(total);
       setIsRunning(false);
       runStartedAtRef.current = null;
 
-      // Reset to idle after delay
       resetIdleTimerRef.current = setTimeout(() => {
         setAgentsIdle();
         resetIdleTimerRef.current = null;
@@ -149,19 +169,14 @@ const Dashboard = () => {
     }
   };
 
-  //gemini togle
   useEffect(() => {
     if (isRunning) return;
     setAgents((prev) =>
       prev.map((agent) => {
         if (agent.key !== "gemini") return agent;
-        if (geminiQuota <= 0) {
-          return { ...agent, status: "error", usage: "Quota exhausted" };
-        }
-        if (useQualityCheck) {
-          return { ...agent, status: "idle", usage: "Quality check armed" };
-        }
-        return { ...agent, status: "idle", usage: "Output Quality Checker" };
+        if (geminiQuota <= 0) return { ...agent, status: "error", usage: "Quota exhausted" };
+        if (useQualityCheck) return { ...agent, status: "idle", usage: "Quality check armed" };
+        return { ...agent, status: "idle", usage: agent.idleUsage };
       })
     );
   }, [useQualityCheck, geminiQuota, isRunning]);
@@ -222,11 +237,17 @@ const Dashboard = () => {
               </div>
 
               {!isRunning && classification !== "Not yet classified" && (
-                <div className="mb-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs inline-block">🎯 Task Type: <strong>{classification}</strong></div>
+                <div className="mb-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs inline-block">
+                  🎯 Task Type: <strong>{classification}</strong>
+                </div>
               )}
-              
-              <div className="mb-2 flex-1 bg-white/[0.04] backdrop-blur-xl p-3 rounded-[28px] overflow-y-auto text-sm font-mono text-gray-200 whitespace-pre-wrap">{output || "No output yet..."}</div>
-              <button onClick={handleClearOutput} className="bg-gradient-to-r from-emerald-500 to-emerald-400 text-black px-4 py-2 rounded-xl text-sm font-medium hover:from-emerald-400 hover:to-emerald-300 hover:-translate-y-1 transition-all duration-200 shadow-lg" >Clear Output</button>
+
+              <div className="mb-2 flex-1 bg-white/[0.04] backdrop-blur-xl p-3 rounded-[28px] overflow-y-auto text-sm font-mono text-gray-200 whitespace-pre-wrap">
+                {output || "No output yet..."}
+              </div>
+              <button onClick={handleClearOutput} className="bg-gradient-to-r from-emerald-500 to-emerald-400 text-black px-4 py-2 rounded-xl text-sm font-medium hover:from-emerald-400 hover:to-emerald-300 hover:-translate-y-1 transition-all duration-200 shadow-lg">
+                Clear Output
+              </button>
             </div>
           </div>
         </section>
@@ -234,40 +255,11 @@ const Dashboard = () => {
         <section className="rounded-[28px] border border-white/10 bg-white/[0.04] p-6 shadow-2xl backdrop-blur-xl">
           <div className="flex-1">
             <label className="block text-sm font-medium text-slate-300 mb-3">Describe your task</label>
-            <div className="relative">
-              <textarea value={task} onChange={(e) => setTask(e.target.value)} placeholder="e.g., Create a responsive landing page with modern glassmorphism design..." rows={4} className="w-full p-5 rounded-3xl bg-black/50 backdrop-blur-xl border border-white/20 text-white placeholder-slate-500 focus:border-emerald-400/50 focus:ring-2 focus:ring-emerald-400/20 focus:outline-none resize-vertical transition-all duration-200 shadow-2xl min-h-[120px] hover:border-white/30"/>
-              <div className="absolute bottom-4 right-4 text-xs text-slate-500">{task.length}/500</div>
-            </div>
-
-            <div className="mt-4 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-              <p className="text-xs text-slate-500">Llama3 manager routes tasks to Deepseek (code) or Mistral (text), with fallback chain support</p>
-              <button
-                onClick={handleRun}
-                disabled={!task.trim() || isRunning}
-                className={`px-6 py-3 rounded-xl font-semibold flex items-center gap-2 ${
-                  !task.trim() || isRunning
-                    ? "bg-gray-600 text-gray-400 cursor-not-allowed"
-                    : "bg-green-500 hover:bg-green-600 text-black"
-                }`}
-              >
+            <textarea value={task} onChange={(e) => setTask(e.target.value)} rows={4} className="w-full p-5 rounded-3xl bg-black/50 border border-white/20 text-white" />
+            <div className="mt-4 flex gap-4">
+              <button onClick={handleRun} disabled={!task.trim() || isRunning} className="px-6 py-3 rounded-xl bg-green-500 text-black">
                 {isRunning ? "Running..." : "Run Task"}
               </button>
-              <label className={`flex items-center gap-3 ${!isGeminiAvailable ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}>
-                <div className="relative">
-                  <input type="checkbox" className="sr-only peer" checked={useQualityCheck} onChange={(e) => geminiQuota > 0 && setUseQualityCheck(e.target.checked)} disabled={geminiQuota <= 0 || isRunning}/>
-                  <div
-                    className={`w-11 h-6 rounded-full peer peer-checked:bg-emerald-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full ${
-                      !isGeminiAvailable ? "bg-gray-700" : "bg-gray-600"
-                    }`}
-                  ></div>
-                </div>
-                <span className="text-sm text-slate-300">
-                  Gemini Quality Check {useQualityCheck ? `(ON • ${geminiQuota}/10 left)` : "(OFF)"}
-                  {!isGeminiAvailable && geminiQuota === 0 && (
-                    <span className="ml-2 text-xs text-red-400">• Quota exhausted</span>
-                  )}
-                </span>
-              </label>
             </div>
           </div>
         </section>
