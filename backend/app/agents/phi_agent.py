@@ -47,7 +47,7 @@ def judge_and_route(task: str, output: str, retries: int = 1) -> str:
         response = client.chat(
             model="phi3:mini",
             messages=[{"role": "user", "content": prompt}],
-            options={ "temperature": 0.0,"num_predict": 50, "stop": ["\n"]},keep_alive=0)
+            options={ "temperature": 0.0,"num_predict": 50, "stop": ["\n"]},keep_alive=120)
         score_text = _extract_content(response).strip()
         match = re.search(r"\b(100|[1-9]?\d)\b", score_text)
         if not match:

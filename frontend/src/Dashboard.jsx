@@ -3,7 +3,7 @@ import AgentPanel from "./AgentPanel.jsx";
 import Topbar from "./Topbar.jsx";
 
 const AGENT_BLUEPRINT = [
-  { id: 1, key: "llama3", name: "Llama3 Router", idleUsage: "Classifies and routes tasks" },
+  { id: 1, key: "llama3", name: "Head Agent", idleUsage: "Classifies and routes tasks" },
   { id: 2, key: "deepseek", name: "DeepSeek Coder", idleUsage: "Handles code tasks" },
   { id: 3, key: "mistral", name: "Mistral", idleUsage: "Handles text tasks" },
   { id: 4, key: "phi", name: "Phi", idleUsage: "Fallback agent standby" },
@@ -12,7 +12,9 @@ const AGENT_BLUEPRINT = [
 
 const Dashboard = () => {
   const [task, setTask] = useState("");
-  const [agents, setAgents] = useState(AGENT_BLUEPRINT.map((a) => ({...a,status: "idle",usage: a.idleUsage,startTime: null,endTime: null,duration: null,})));
+const [agents, setAgents] = useState(AGENT_BLUEPRINT.map((a) => ({ ...a, status: "idle", usage: a.idleUsage, startTime: null, endTime: null, duration: null })));
+
+
   const [isRunning, setIsRunning] = useState(false);
   const [statusLabel, setStatusLabel] = useState("");
   const [output, setOutput] = useState("");
@@ -61,7 +63,8 @@ const Dashboard = () => {
   };
 
   const setBusyAgent = (key, usage, startAt = Date.now()) => {
-    setAgents((prev) =>prev.map((a) =>a.key === key ? { ...a, status: "busy", usage, startTime: startAt, endTime: null, duration: null } : a));};
+    setAgents((prev) => prev.map((a) => a.key === key ? { ...a, status: "busy", usage, startTime: startAt, endTime: null, duration: null } : a));
+  };
 
   const updateAgentsFromResponse = (taskdata, now) => {
     const { agents_used = [], fallback_used = false, classification: cls } = taskdata;
@@ -70,7 +73,8 @@ const Dashboard = () => {
       prev.map((agent) => {
         if (agent.key === "llama3") {
           const duration = agent.startTime ? ((now - agent.startTime) / 1000).toFixed(2) : null;
-          return {...agent,status: "complete",usage: `Classified: ${cls || "Unknown"}`,endTime: now,duration,};}
+          return { ...agent, status: "complete", usage: `Classified: ${cls || "Unknown"}`, endTime: now, duration };
+        }
         if (agent.key === "gemini") {
           if (useQualityCheck && geminiQuota > 0) {
             return { ...agent, status: "complete", usage: "Quality check complete", endTime: now };
@@ -79,7 +83,8 @@ const Dashboard = () => {
         }
         if (agents_used.includes(agent.key)) {
           const duration = agent.startTime ? ((now - agent.startTime) / 1000).toFixed(2) : null;
-          return {...agent,status: "complete",usage: fallback_used && agent.key === "phi" ? "Fallback executed" : "Task completed",endTime: now,duration,};}
+          return { ...agent, status: "complete", usage: fallback_used && agent.key === "phi" ? "Fallback executed" : "Task completed", endTime: now, duration };
+        }
         return { ...agent, status: "idle", usage: agent.idleUsage };
       })
     );
@@ -155,7 +160,7 @@ const Dashboard = () => {
 
       setOutput(`❌ Error: ${error.message || "Unknown error"}`);
       setStatusLabel("Execution failed");
-      setAgents((prev) =>prev.map((a) =>a.key === "phi"? { ...a, status: "error", usage: "Fallback triggered" }: { ...a, status: "idle", usage: a.idleUsage }));
+      setAgents((prev) => prev.map((a) => a.key === "phi" ? { ...a, status: "error", usage: "Fallback triggered" } : { ...a, status: "idle", usage: a.idleUsage }));
     } finally {
       const total = ((Date.now() - start) / 1000).toFixed(2);
       setTotalRunTime(total);
@@ -255,7 +260,7 @@ const Dashboard = () => {
         <section className="rounded-[28px] border border-white/10 bg-white/[0.04] p-6 shadow-2xl backdrop-blur-xl">
           <div className="flex-1">
             <label className="block text-sm font-medium text-slate-300 mb-3">Describe your task</label>
-            <textarea value={task} onChange={(e) => setTask(e.target.value)} rows={4} className="w-full p-5 rounded-3xl bg-black/50 border border-white/20 text-white" />
+            <textarea value={task} onChange={(e) => setTask(e.target.value)} rows={4} className="w-full p-5 rounded-3xl bg-black/50 border border-white/20 text-white" placeholder="Write your task here (text: English)"/>
             <div className="mt-4 flex gap-4">
               <button onClick={handleRun} disabled={!task.trim() || isRunning} className="px-6 py-3 rounded-xl bg-green-500 text-black">
                 {isRunning ? "Running..." : "Run Task"}

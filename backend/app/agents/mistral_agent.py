@@ -38,11 +38,11 @@ def merge_output(task: str, code_output: str, text_output: str):
         """
 
     try:
-        response = client.chat(model="mistral",messages=[{"role": "user", "content": prompt}],options={"temperature": 0.4,"num_predict": 800,"stop": ["\n\n\n"],"num_ctx": 4096,"repeat_penalty": 1.1},keep_alive=0)
+        response = client.chat(model="mistral",messages=[{"role": "user", "content": prompt}],options={"temperature": 0.4,"num_predict": 600,"stop": ["\n\n\n"],"repeat_penalty": 1.1},keep_alive=30)
         text = _extract(response)
         if not text or len(text.strip()) < 20:
             logger.warning("mistral_invalid_output")
-            return text_output if 'text_output' in locals() else task_text
+            return text_output if 'text_output' in locals() else task
         return text
     except Exception as e:
         logger.error(f"merge failed: {e}")
@@ -60,12 +60,11 @@ def generate(task_text: str):
         - Be structured
         - Be concise
         - No hallucination
-        - Max 500 words
         TASK:
         {task_text}
         """
     try:
-        response = client.chat(model="mistral",messages=[{"role": "user", "content": prompt}],options={"temperature": 0.4,"num_predict": 800,"stop": ["</s>"],"num_ctx": 4096,"repeat_penalty": 1.1},keep_alive=60)
+        response = client.chat(model="mistral",messages=[{"role": "user", "content": prompt}],options={"temperature": 0.4,"num_predict": 500,"stop": ["</s>"],"repeat_penalty": 1.1},keep_alive=30)
         text = _extract(response)
         logger.info("mistral_success | output_length=%s", len(text or ""))
         return text
