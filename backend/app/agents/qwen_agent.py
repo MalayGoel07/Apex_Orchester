@@ -25,7 +25,7 @@ def generate(task_text: str) -> str:
     TASK:
     {task_text}'''
     try:
-        response = client.chat(model="deepseek-fast", messages=[{"role": "user", "content": prompt}],options={"temperature": 0.1,"top_p": 0.9,"repeat_penalty": 1.1,"num_predict": 1000,"stop": ["\n\n\n"],"frequency_penalty":0},keep_alive=30)
+        response = client.chat(model="qwen2.5-coder:3b", messages=[{"role": "user", "content": prompt}],options={"temperature": 0.1,"top_p": 0.9,"repeat_penalty": 1.1,"num_predict": 1000,"stop": ["\n\n\n"],"frequency_penalty":0},keep_alive=30)
         text = _extract_content(response)
         if not text or len(text.strip()) < 20:
             logger.warning("deepseek_fallback | reason=no_response")

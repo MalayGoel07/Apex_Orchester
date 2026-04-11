@@ -72,7 +72,7 @@ def run_agent(merged_output: str, original_task: str, retries: int = 1) -> str:
             return merged_output
         logger.warning("gemini_reroute | score=%s", score)
         try:
-            from backend.app.agents.llama3 import orchestrate
+            from backend.app.agents.main_orchester import orchestrate
             rerun = orchestrate(original_task, use_quality_check=False)
             new_output = rerun.get("output", merged_output)
             return run_agent(new_output, original_task, retries - 1)

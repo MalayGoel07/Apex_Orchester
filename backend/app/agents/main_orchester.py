@@ -6,7 +6,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Literal, Dict, List, Tuple, Optional
 from ollama import Client
-from backend.app.agents.deepseek_agent import generate as deepseek_generate
+from backend.app.agents.qwen_agent import generate as qwen_generator
 from backend.app.agents.mistral_agent import generate as mistral_generate
 from backend.app.agents.phi_agent import generate as phi_generate
 
@@ -40,7 +40,7 @@ class QuotaManager:
         with self._lock:
             return self._quota
 _gemini_quota = QuotaManager()
-ClassificationTag = Literal["code", "text", "mixed","website"]
+ClassificationTag = Literal["code", "text", "mixed","website","learn"]
 
 def _log(event: str, data: Optional[Dict] = None):
     data = data or {}
@@ -92,17 +92,19 @@ def _merge_results(code: Optional[str], text: Optional[str]) -> str:
 def _build_classification_prompt(task_text: str) -> str:
     return """You are a task classifier. Classify the task below into EXACTLY ONE tag among the TAGS.
 
-        TAGS:
-        - website: Use this if the task mentions building a web app, webapp, web application, frontend, backend API, full-stack, UI components, or any combination of these. Overrides all other tags.
-        - code: needs only code written (functions, scripts, algorithms) — NOT a web app
+        - website: ANY task involving components, buttons, forms, pages, UI, React, HTML, CSS, frontend, backend, API, full-stack, or web-related code. When in doubt, use this. Overrides all other tags.
+        - learn: ANY task involving a syllabus, curriculum, or topic where the user wants study material. This includes: question papers, viva questions, theory notes, lecture content, progressive questions (easy to hard), resources, or any educational output. Triggers when user uploads or pastes a syllabus OR asks for QP, viva, notes, lecture, resources for any subject. Overrides code and text tags.
+        - code: needs only pure logic code (functions, scripts, algorithms) — NOT a web app, NOT a component, NOT study material
         - text: needs only explanation, documentation, or analysis — no code at all
-        - mixed: needs BOTH a code implementation AND an explanation — NOT a web app
+        - mixed: needs BOTH a code implementation AND an explanation — NOT a web app, NOT study material
 
         RULES:
         1. Output ONLY a JSON object, no markdown, no extra text.
         2. Use the tag string exactly as written above.
         3. If the task involves building anything web-related, ALWAYS use "website".
         4. Default to "text" when uncertain.
+        5. If the user mentions "syllabus", "QP", "question paper", "viva", "notes", "lecture", "resources" → ALWAYS use "learn"
+        6. If the task mentions a component, button, form, page, or any UI element → ALWAYS use "website"
 
         OUTPUT FORMAT:
         {{"tag": "<exact_tag>"}}
@@ -137,7 +139,7 @@ def _classify(task_text: str) -> ClassificationTag:
         parsed = _parse_json_output(raw, expected_keys=["tag"])
         if parsed:
             tag = parsed["tag"]
-            if tag in ("code", "text", "mixed","website"):
+            if tag in ("code", "text", "mixed","website","learn"):
                 _log("classification_success", {"tag": tag})
                 return tag
         _log("classification_parse_failed", {"raw": raw[:200]})
@@ -176,7 +178,7 @@ def _fallback(task: str) -> Tuple[str, str]:
 
 def _run_agent(agent_name: str, task: str) -> Tuple[str, str]:
     if agent_name == "deepseek":
-        return deepseek_generate(task), "deepseek"
+        return qwen_generator(task), "deepseek"
     elif agent_name == "mistral":
         return mistral_generate(task), "mistral"
     elif agent_name == "phi":
@@ -238,10 +240,14 @@ def orchestrate(task_text: str, use_quality_check: bool = False) -> Dict:
                     results["code"] = result
                     fallback_used = True
                     agent_trace.append(agent)
-
+        elif classification == "learn":
+            _log("routing", {"strategy": "switching to learn orchestrator"})
+            from backend.app.agents.learn_orchester import learn_pipeline
+            final_output = learn_pipeline(task_text)
+            return {"output": final_output,"agents_used": ["multi_agents"],"classification": classification,"classifier_model": CLASSIFIER_MODEL,"fallback_used": False,"gemini_quota_remaining": _gemini_quota.remaining,"success": True,}
         elif classification == "website":
             _log("routing", {"strategy": "switching to website orchestrator"})
-            from backend.app.agents.multi_agent import multi_agents
+            from backend.app.agents.website_orchester import multi_agents
             final_output = multi_agents(task_text)
             return {"output": final_output,"agents_used": ["multi_agents"],"classification": classification,"classifier_model": CLASSIFIER_MODEL,"fallback_used": False,"gemini_quota_remaining": _gemini_quota.remaining,"success": True,}
         else:

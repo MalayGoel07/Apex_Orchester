@@ -7,16 +7,23 @@ from typing import Optional, Dict, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 client = Client()
-logger = logging.getLogger("orchestra")
+logger = logging.getLogger("website_orchester")
 
 AGENT_CAPABILITIES = {
-    "deepseek-coder:1.3b": ["backend", "api_integration"],
-    "qwen2.5-coder:3b":    ["backend", "api_integration"],
-    "starcoder2:3b":       ["react", "html_css"],
-    "phi3:mini":           ["react", "html_css", "js_logic"],
+    "deepseek-coder:1.3b":["backend", "api_integration"],
+    "qwen2.5-coder:3b":["backend", "api_integration"],
+    "starcoder2:3b":["react", "html_css"],
+    "phi3:mini":["react", "html_css", "js_logic"],
+}
+MODEL_DEVICE = {
+    "deepseek-coder:1.3b": 99,
+    "starcoder2:3b":99,
+    "qwen2.5-coder:3b":0,
+    "phi3:mini":0,
 }
 
-DECOMPOSER_MODEL=MERGER_MODEL = "phi3:mini"
+DECOMPOSER_MODEL = "phi3:mini"
+MERGER_MODEL="llama3:8b-instruct-q4_K_M"
 _JSON_ARRAY_RE = re.compile(r'\[\s*\{.*?\}\s*\]', re.DOTALL)
 
 
@@ -25,7 +32,9 @@ def _log(event: str, data: Optional[Dict] = None):
         return
     data = data or {}
     data["_ts"] = round(time.time() % 10000, 2)
-    logger.info("%s | %s", event, json.dumps(data, ensure_ascii=False, default=str))
+    payload = json.dumps(data, ensure_ascii=False, default=str)
+    logger.info("%s | %s", event, payload)
+    print(f"[LEARN_LOG] {event} | {payload}")
 
 def _extract_content(response) -> str:
     if isinstance(response, dict):
@@ -77,6 +86,7 @@ def decompose(task: str) -> List[Dict]:
           - "description": exactly what code to write for this subtask
         - Minimum 3 subtasks, maximum 6
         - Every subtask must be independently buildable
+        - If the task is React-based, use ONLY "react" type — never pair "react" with "js_logic"  # ← add this
 
         OUTPUT FORMAT:
         [
@@ -84,7 +94,7 @@ def decompose(task: str) -> List[Dict]:
           {{"id": "s2", "type": "backend", "description": "Create /api/products GET route returning JSON list"}}
         ]"""
     try:
-        response = client.chat(model=DECOMPOSER_MODEL,messages=[{"role": "user", "content": prompt}],options={"temperature": 0.1, "num_predict": 1200},keep_alive=0,)
+        response = client.chat(model=DECOMPOSER_MODEL,messages=[{"role": "user", "content": prompt}],options={"temperature": 0.1, "num_predict": 1200,"num_gpu": MODEL_DEVICE.get(DECOMPOSER_MODEL, 0)},keep_alive=0,)
         text = _extract_content(response)
         plan = _parse_json_safely(text)
         if isinstance(plan, list) and len(plan) >= 2:
@@ -98,9 +108,9 @@ def decompose(task: str) -> List[Dict]:
 
 def _build_subtask(model: str, subtask: Dict, task_context: str) -> Dict:
     type_instructions = {
-        "html_css":        "Write clean semantic HTML with embedded CSS. No JS.",
-        "react":           "Write a complete React functional component with hooks if needed. Use Tailwind for styling.",
-        "js_logic":        "Write vanilla JavaScript logic. No frameworks. Export functions if needed.",
+        "html_css":        "Write clean semantic HTML with embedded CSS. No JS. No React.",
+        "react":           "Write a complete React functional component with hooks. Use inline styles or Tailwind. NO separate JS files. NO vanilla DOM manipulation. Everything self-contained in one component.",
+        "js_logic":        "Write vanilla JavaScript only. No React, no imports. Pure functions only.",
         "backend":         "Write FastAPI route(s) with proper models and response schemas.",
         "api_integration": "Write the fetch/axios call with async/await, error handling, and typed response parsing.",
     }
@@ -118,7 +128,7 @@ def _build_subtask(model: str, subtask: Dict, task_context: str) -> Dict:
 
             Return ONLY the code. No explanation. No markdown fences."""
     try:
-        response = client.chat( model=model, messages=[{"role": "user", "content": prompt}], options={"temperature": 0.15, "num_predict": 1200}, keep_alive=0,)
+        response = client.chat( model=model, messages=[{"role": "user", "content": prompt}], options={"temperature": 0.15, "num_predict": 1200, "num_gpu": MODEL_DEVICE.get(model, 0)}, keep_alive=0,)
         code = _extract_content(response)
         _log("SUBTASK_DONE", {"id": subtask["id"], "model": model})
         return {"id": subtask["id"], "type": subtask["type"], "code": code, "error": None}
@@ -147,10 +157,18 @@ def _merge(task: str, subtask_results: List[Dict]) -> str:
         - Stitch all pieces into one coherent, working codebase
         - Resolve any naming conflicts or duplications
         - Ensure frontend and backend are properly connected
-        - Return ONLY the final unified code, no explanation"""
+        - Return ONLY the final unified code, no explanation
+        
+        STRICT RULES:
+        - Remove incomplete or broken code
+        - Ensure all imports are valid
+        - Ensure backend and frontend API routes match EXACTLY
+        - Return a working project
+        - If something is broken, FIX it
+        """
 
     try:
-        response = client.chat( model=MERGER_MODEL, messages=[{"role": "user", "content": prompt}], options={"temperature": 0.1, "num_predict": 2000}, keep_alive=0,)
+        response = client.chat( model=MERGER_MODEL, messages=[{"role": "user", "content": prompt}], options={"temperature": 0.1, "num_predict": 2000, "num_gpu": MODEL_DEVICE.get(MERGER_MODEL, 0)}, keep_alive=0,)
         _log("MERGE_DONE", {})
         return _extract_content(response)
     except Exception as e:

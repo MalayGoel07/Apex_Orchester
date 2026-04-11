@@ -59,7 +59,7 @@ def judge_and_route(task: str, output: str, retries: int = 1) -> str:
             return output
         logger.warning("phi_reroute | score=%s", score)
         try:
-            from backend.app.agents.llama3 import orchestrate as orc
+            from backend.app.agents.main_orchester import orchestrate as orc
             rerun = orc(task, use_quality_check=False)
             new_output = rerun.get("output", output)
             return judge_and_route(task, new_output, retries - 1)
